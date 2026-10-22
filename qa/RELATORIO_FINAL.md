@@ -4,7 +4,7 @@ Data: 2026-10-21
 
 ## Resultado geral
 
-**PARCIALMENTE VALIDADO; integração HikCentral bloqueada.** A versão 1.0.1 está instalada e foi testada no Android físico. Não houve cadastro, envio de face ou alteração de configurações. A rede não alcança TCP `37443`, portanto OpenAPI e catracas não puderam ser validadas.
+**PARCIALMENTE VALIDADO; integração HikCentral bloqueada.** A versão 1.0.1 está instalada e foi testada no Android físico. Não houve cadastro, envio de face ou alteração de configurações. Após a correção do IP, TCP `37443` está acessível, mas TLS falha porque a cadeia do certificado não é confiável no Windows nem no Android. A OpenAPI e catracas ainda não puderam ser validadas.
 
 ## Ambiente e dispositivo
 
@@ -31,10 +31,10 @@ Data: 2026-10-21
 | Validações restantes, rotação e teclado | NÃO EXECUTADO | Sem cobertura automatizada completa desses cenários. |
 | DNS no Windows e Android | APROVADO | Ambos resolveram `608905397dde.sn.mynetname.net` para `200.149.203.116`. |
 | ICMP no Android | APROVADO | Ping ao IP respondeu. |
-| TCP Android/Windows para 37443 | REPROVADO | Android: `No route to host`; Windows: timeout. |
-| HTTPS/TLS e identificação do serviço | BLOQUEADO | TCP falhou antes do handshake TLS; não foi possível identificar o serviço/porta. |
-| Autenticação, endpoints e JSON OpenAPI | BLOQUEADO | Sem TCP e sem validação de AppKey/AppSecret. Login admin não foi usado. |
-| Criar Person, face e permissões | NÃO EXECUTADO | Nenhuma chamada mutável foi enviada. |
+| TCP Android/Windows para 37443 | APROVADO (reteste após correção do IP) | Ambos estabelecem TCP para `200.149.203.116:37443`. |
+| HTTPS/TLS e identificação do serviço | REPROVADO | Windows: `SEC_E_UNTRUSTED_ROOT`; Android: `unable to get local issuer certificate`. TLS confiável não se estabelece; HTTP/OpenAPI não foram acessados. |
+| Autenticação, endpoints e JSON OpenAPI | BLOQUEADO | TLS falha antes da autenticação; AppKey/AppSecret não foram enviados. Login admin não foi usado. |
+| Criar Person, face e permissões | NÃO EXECUTADO | TLS bloqueia a chamada; nenhuma chamada mutável foi enviada. |
 | Sincronização de catracas | NÃO EXECUTADO | Sem acesso OpenAPI/terminais. |
 | GitHub Actions | APROVADO | Workflow “Android APK” do commit `8d38211` concluiu com sucesso (run `39708366446`). |
 
@@ -42,7 +42,7 @@ Data: 2026-10-21
 
 - JVM: 3 aprovados, 0 reprovados.
 - Dispositivo (1.0.1): 4 cenários aprovados — abrir/ver tela, configurações, validação de nome vazio e abrir/cancelar câmera; nenhum Person enviado.
-- Rede: DNS aprovado em 2 origens; ICMP aprovado no Android; TCP reprovado em 2 origens; TLS não alcançado.
+- Rede: DNS aprovado em 2 origens; ICMP e TCP 37443 aprovados no Android; TLS reprovado em Windows e Android por emissor não confiável.
 - Crashes: nenhum `FATAL EXCEPTION` detectado nos logs coletados.
 
 ## Assinatura e preservação
@@ -57,11 +57,13 @@ A tentativa inicial de atualizar o app 1.0.0 com o APK debug local foi recusada 
 - Configurações sem alteração: `qa/reports/device-20261021-230327/settings.png`.
 - Validação de nome vazio: `qa/reports/device-20261021-230934/empty-validation.png`.
 - Prévia da câmera, sem captura: `qa/reports/camera-20261021-230341/camera-preview.png`.
-- Diagnóstico de rede: `qa/reports/connectivity-20261021-231046.txt`.
+- Diagnóstico de rede anterior: `qa/reports/connectivity-20261021-231046.txt`.
+- Diagnóstico após correção do IP: `qa/reports/connectivity-20261021-233717.txt` (37443 TCP OK; certificado não confiável).
+- Teste comparativo 443/8443: `qa/reports/connectivity-20261021-231458.txt` e `qa/reports/connectivity-20261021-231514.txt` (conexão recusada).
 - Relatório/log da suíte local: `qa/reports/run-20261021-230823.log`.
 
 ## Diagnóstico e pendências
 
-DNS e ICMP funcionam a partir do Android, mas TCP à porta externa 37443 falha também no Windows. A causa pode estar em NAT/firewall, rota ou serviço/porta não publicada; a evidência não distingue essas hipóteses. Confirmar com o administrador qual é a porta HTTPS da OpenAPI Artemis e revisar publicação do serviço. Não desativar validação TLS. A [documentação oficial Hikvision OpenAPI V3.1.1](https://enpinfo.hikvision.com/hkwsen/unzip/20260723200832_95640_doc/index.html) lista os endpoints relevantes, mas não confirma que estejam ativos nesta instalação.
+Após o usuário corrigir o IP, DNS, ICMP e TCP para `200.149.203.116:37443` funcionam do Android; TCP também funciona no Windows. O erro atual é TLS: Windows relata `SEC_E_UNTRUSTED_ROOT` e Android relata `unable to get local issuer certificate`. Isso indica uma cadeia de certificados que os clientes não confiam. Corrigir a cadeia/certificado no servidor para um certificado válido para o hostname, com intermediários completos e raiz confiável. Não desativar validação TLS. Portas 443 e 8443 foram recusadas nos testes; isso não prova que 37443 seja Artemis. Ainda é necessária confirmação de que o serviço nessa porta é a OpenAPI. A [documentação oficial Hikvision OpenAPI V3.1.1](https://enpinfo.hikvision.com/hkwsen/unzip/20260723200832_95640_doc/index.html) lista os endpoints relevantes, mas não confirma que estejam ativos nesta instalação.
 
-A execução completa futura de `run-all.ps1` precisa do keystore que assinou o APK 1.0.1 instalado para que `adb install -r` seja compatível. Também falta restaurar TCP e executar o teste somente leitura com AppKey/AppSecret da OpenAPI. O teste ponta a ponta requer uma pessoa de teste presente e autorizada; a sincronização deve ser conferida nos terminais.
+A execução completa futura de `run-all.ps1` precisa do keystore que assinou o APK 1.0.1 instalado para que `adb install -r` seja compatível. Também falta corrigir TLS e executar o teste somente leitura com AppKey/AppSecret da OpenAPI. O teste ponta a ponta requer uma pessoa de teste presente e autorizada; a sincronização deve ser conferida nos terminais.
