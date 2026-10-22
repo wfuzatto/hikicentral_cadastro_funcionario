@@ -4,10 +4,14 @@ import android.util.Base64
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-/** Assinatura HMAC-SHA256 do Artemis OpenAPI. Não inclui JSON/face na assinatura. */
+/**
+ * Artemis OpenAPI: HTTP method, Accept, Content-Type, signed headers e URI.
+ * Não adicionar linhas vazias para Content-MD5/Date quando os cabeçalhos não
+ * foram enviados. Ordem alfabética dos cabeçalhos assinados é obrigatória.
+ */
 object HikSigner {
     fun canonical(path: String, key: String, timestamp: String): String =
-        "POST\n*/*\n\napplication/json\n\nx-ca-key:" + key +
+        "POST\n*/*\napplication/json\nx-ca-key:" + key +
             "\nx-ca-timestamp:" + timestamp + "\n" + path
 
     fun sign(path: String, key: String, secret: String, timestamp: String): String {
