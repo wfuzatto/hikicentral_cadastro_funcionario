@@ -4,7 +4,6 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyStore
 import javax.crypto.Cipher
@@ -12,112 +11,106 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-data class ServerSettings(
-    val host: String,
-    val port: Int,
-    val appKey: String,
-    val appSecret: String
+data class BackendSettings(
+    val url: String,
+    val deviceToken: String,
+    val caPem: String = "",
+    val caFingerprint: String = ""
 ) {
     fun validate() {
-        require(host.matches(Regex("[A-Za-z0-9][A-Za-z0-9.-]*"))) { "Informe um host ou IP sem https:// nem barras." }
-        require(port in 1..65535) { "Porta inválida." }
-        require(appKey.isNotBlank() && appSecret.isNotBlank()) {
-            "Configure AppKey e AppSecret da OpenAPI (não são o login admin)."
+        val uri = java.net.URI(url.trim())
+        require(uri.scheme == "https" && !uri.host.isNullOrBlank() &&
+            (uri.rawPath.isNullOrEmpty() || uri.rawPath == "/") &&
+            uri.rawQuery == null && uri.rawUserInfo == null && uri.rawFragment == null) {
+            "Informe URL HTTPS completa, sem caminhos, parâmetros ou usuário."
+        }
+        require(deviceToken.isNotBlank()) { "Informe o token do dispositivo." }
+        require(deviceToken.length <= 160) { "Token inválido." }
+        if (caPem.isNotBlank()) {
+            BackendApi.verifyCa(caPem, caFingerprint)
         }
     }
 }
 
-data class PendingPerson(
-    val personId: String,
-    val remainingGroups: List<String>,
-    val needsApply: Boolean = true
-)
+data class PendingEnrollment(val idempotencyKey: String)
 
 class SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("hikcentral_conf_v1", Context.MODE_PRIVATE)
-    private val keyAlias = "hikcentral_openapi_aes_v1"
+    private val alias = "hikcentral_device_token_v1"
 
-    fun load(): ServerSettings = ServerSettings(
-        host = prefs.getString("host", "608905397dde.sn.mynetname.net") ?: "",
-        port = prefs.getInt("port", 37443),
-        appKey = decrypt(prefs.getString("key", "") ?: ""),
-        appSecret = decrypt(prefs.getString("secret", "") ?: "")
+    init {
+        // Migração sem apagar pendências antigas: elimina credenciais Artemis do app.
+        if (prefs.contains("key") || prefs.contains("secret")) {
+            prefs.edit().remove("key").remove("secret").apply()
+            val keys = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            if (keys.containsAlias("hikcentral_openapi_aes_v1")) {
+                keys.deleteEntry("hikcentral_openapi_aes_v1")
+            }
+        }
+    }
+
+    fun load() = BackendSettings(
+        prefs.getString("backend_url", "") ?: "",
+        decrypt(prefs.getString("device_token", "") ?: ""),
+        prefs.getString("backend_ca", "") ?: "",
+        prefs.getString("backend_ca_fingerprint", "") ?: ""
     )
 
-    fun save(config: ServerSettings) {
-        config.validate()
+    fun save(s: BackendSettings) {
+        s.validate()
         prefs.edit()
-            .putString("host", config.host.trim())
-            .putInt("port", config.port)
-            .putString("key", encrypt(config.appKey))
-            .putString("secret", encrypt(config.appSecret))
+            .putString("backend_url", s.url.trim().trimEnd('/'))
+            .putString("device_token", encrypt(s.deviceToken))
+            .putString("backend_ca", s.caPem)
+            .putString("backend_ca_fingerprint", s.caFingerprint)
             .apply()
     }
 
-    fun successCount(): Int = prefs.getInt("success", 0)
+    fun pending(): PendingEnrollment? {
+        val value = prefs.getString("pending_backend", null) ?: return null
+        return try { PendingEnrollment(java.util.UUID.fromString(value).toString()) }
+        catch (_: Exception) { null }
+    }
+
+    fun savePending(p: PendingEnrollment) {
+        check(prefs.edit().putString("pending_backend", p.idempotencyKey).commit()) {
+            "Não foi possível salvar a chave de idempotência."
+        }
+    }
+    fun clearPending() = prefs.edit().remove("pending_backend").commit()
+    fun legacyPendingPersonId(): String? = try {
+        JSONObject(prefs.getString("pending", "") ?: "").optString("id").ifBlank { null }
+    } catch (_: Exception) { null }
+    fun successCount() = prefs.getInt("success", 0)
     fun incrementSuccess() = prefs.edit().putInt("success", successCount() + 1).apply()
 
-    fun pending(): PendingPerson? {
-        val str = prefs.getString("pending", null) ?: return null
-        return try {
-            val o = JSONObject(str)
-            val groupArray = o.optJSONArray("groups") ?: JSONArray()
-            PendingPerson(
-                o.getString("id"),
-                List(groupArray.length()) { i -> groupArray.getString(i) },
-                o.optBoolean("apply", true)
-            )
-        } catch (_: Exception) { null }
-    }
-
-    fun savePending(p: PendingPerson) {
-        val groups = JSONArray()
-        p.remainingGroups.forEach { groups.put(it) }
-        val obj = JSONObject().put("id", p.personId).put("groups", groups).put("apply", p.needsApply)
-        prefs.edit().putString("pending", obj.toString()).commit()
-    }
-
-    fun clearPending() = prefs.edit().remove("pending").commit()
-
-    private fun secretKey(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val existing = store.getKey(keyAlias, null) as? SecretKey
+    private fun aesKey(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val existing = ks.getKey(alias, null) as? SecretKey
         if (existing != null) return existing
-        val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-        gen.init(
-            KeyGenParameterSpec.Builder(
-                keyAlias,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-            ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build()
-        )
-        return gen.generateKey()
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(KeyGenParameterSpec.Builder(alias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256).build())
+        return generator.generateKey()
     }
-
     private fun encrypt(value: String): String {
         if (value.isBlank()) return ""
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        val iv = Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
-        val bytes = Base64.encodeToString(cipher.doFinal(value.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
-        return iv + ":" + bytes
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey())
+        return Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" +
+            Base64.encodeToString(cipher.doFinal(value.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
     }
-
     private fun decrypt(value: String): String {
-        if (value.isEmpty()) return ""
+        if (value.isBlank()) return ""
         return try {
             val parts = value.split(":", limit = 2)
-            if (parts.size != 2) return ""
-            val iv = Base64.decode(parts[0], Base64.NO_WRAP)
-            val encrypted = Base64.decode(parts[1], Base64.NO_WRAP)
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(128, iv))
-            String(cipher.doFinal(encrypted), Charsets.UTF_8)
-        } catch (_: Exception) {
-            // Se a chave do Keystore foi invalidada, solicitar reconfiguração.
-            ""
-        }
+            cipher.init(Cipher.DECRYPT_MODE, aesKey(),
+                GCMParameterSpec(128, Base64.decode(parts[0], Base64.NO_WRAP)))
+            String(cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)), Charsets.UTF_8)
+        } catch (_: Exception) { "" }
     }
 }
