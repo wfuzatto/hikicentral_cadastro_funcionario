@@ -1,9 +1,11 @@
-﻿# HikCentral Android QA
+# QA offline — backend seguro (branch de desenvolvimento)
 
-Run `./qa/run-all.ps1` from the repository root in PowerShell. It runs JVM tests/build, Windows and Android DNS/TCP/TLS diagnostics, safe update install, basic UI/settings checks, camera open-and-cancel, and log collection on exactly one authorized Android device. Set Java, Android SDK, Gradle and platform-tools in `PATH` first. If PowerShell blocks scripts, start it with `-ExecutionPolicy Bypass` for this invocation.
+Execute `./qa/run-all.ps1` no PowerShell com JDK 17, Android SDK 35, Gradle 8.10.2 e Maven 3.9+.
 
-`adb install -r` preserves app data. The suite never runs `pm clear` or uninstalls the app. If the APK signing key differs, installation fails without removing the existing app; recover the original signing key to update in place.
+Por padrão a suíte realiza **somente build e testes offline**, com HikCentral inteiramente simulado. Não executa ADB, `pm clear`, desinstalação, instalação do APK nem chamadas mutáveis ao servidor. O workflow `Secure Backend / Android offline CI` executa as mesmas etapas em runners isolados.
 
-Connectivity diagnostics use no credentials and do not authenticate to OpenAPI. They report Android and Windows network paths separately. `test-ui.ps1` verifies launch, the accessible settings control, server/port fields without saving changes, and empty-name validation. `test-camera.ps1` opens Camera and cancels without taking a photo. Rotation and other keyboard flows need additional testing. `test-api.ps1` intentionally performs no calls: configure OpenAPI AK/SK securely on-device and use the app's read-only Test OpenAPI control. No Person is created by this suite.
+Os scripts `test-ui.ps1`, `test-camera.ps1`, `install-apk.ps1` e `test-connectivity.ps1` são artefatos históricos do aplicativo antigo: **não executar nesta etapa**, pois podem depender de ADB ou do host Artemis externo. Nenhum deles é invocado por `run-all.ps1`. O `test-api.ps1` foi substituído por orientação para o teste mock.
 
-Never place AppKey/AppSecret, face photos, or personal data in reports. Generated device artifacts are timestamped under `qa/reports/` and are ignored by Git by default; review any artifacts before sharing. Do not use production data for end-to-end tests.
+Somente após aprovação do backend, rede e TLS, estabeleça uma suíte separada para dispositivos físicos. APKs debug podem usar assinaturas distintas. Não desinstale nem limpe o telefone atual.
+
+Os relatórios anteriores em `qa/RELATORIO_FINAL.md` descrevem o aplicativo legado V1.0.1, não constituem validação do backend.

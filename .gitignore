@@ -25,3 +25,11 @@ backend/**/*.cer
 backend/**/*.db
 backend/**/*.mv.db
 backend/**/*.lock.db
+
+# QA screenshots and execution output
+qa/reports/*.png
+qa/reports/*.jpg
+qa/reports/*.jpeg
+qa/reports/*.log
+qa/reports/*.txt
+qa/reports/*.xml
