@@ -1,9 +1,9 @@
-# HikCentral Android QA
+﻿# HikCentral Android QA
 
-Run `./qa/run-all.ps1` from the repository root in PowerShell. The suite runs local JVM unit tests and builds the debug APK, then attempts a safe update install and basic launch/hierarchy/screenshot capture on exactly one **authorized** Android device. Set Java, Android SDK, Gradle and platform-tools in `PATH` first.
+Run `./qa/run-all.ps1` from the repository root in PowerShell. It runs JVM tests/build, Windows and Android DNS/TCP/TLS diagnostics, safe update install, basic UI/settings checks, camera open-and-cancel, and log collection on exactly one authorized Android device. Set Java, Android SDK, Gradle and platform-tools in `PATH` first. If PowerShell blocks scripts, start it with `-ExecutionPolicy Bypass` for this invocation.
 
-`adb install -r` preserves app data. The suite never runs `pm clear` or uninstalls the app. If the APK signing key differs, installation fails without removing the existing app; use the original signing key for an in-place update.
+`adb install -r` preserves app data. The suite never runs `pm clear` or uninstalls the app. If the APK signing key differs, installation fails without removing the existing app; recover the original signing key to update in place.
 
-`test-connectivity.ps1` tests DNS, TCP and TLS from Windows only. It cannot establish the phone's network path. `test-ui.ps1` checks launch and visible labels; it does not automate dialogs, form validation, keyboard, rotation or camera. Camera and API scripts deliberately stop short of capturing biometric data or creating records. API credentials must be configured securely on the device; the app's Test OpenAPI action is read-only.
+Connectivity diagnostics use no credentials and do not authenticate to OpenAPI. They report Android and Windows network paths separately. `test-ui.ps1` verifies launch, the accessible settings control, server/port fields without saving changes, and empty-name validation. `test-camera.ps1` opens Camera and cancels without taking a photo. Rotation and other keyboard flows need additional testing. `test-api.ps1` intentionally performs no calls: configure OpenAPI AK/SK securely on-device and use the app's read-only Test OpenAPI control. No Person is created by this suite.
 
-Never place AppKey/AppSecret, photos, or real personal data in reports. Device artifacts are timestamped under `qa/reports/` and should be reviewed before sharing. Do not use production data for end-to-end tests. No Person is created by this QA suite.
+Never place AppKey/AppSecret, face photos, or personal data in reports. Generated device artifacts are timestamped under `qa/reports/` and are ignored by Git by default; review any artifacts before sharing. Do not use production data for end-to-end tests.

@@ -31,8 +31,10 @@ try {
         & $gradle testDebugUnitTest assembleDebug --no-daemon
         if ($LASTEXITCODE -ne 0) { throw "Gradle failed with exit code $LASTEXITCODE" }
         if (-not $SkipDevice) {
+            & (Join-Path $PSScriptRoot 'test-connectivity.ps1')
             & (Join-Path $PSScriptRoot 'install-apk.ps1')
             & (Join-Path $PSScriptRoot 'test-ui.ps1')
+            & (Join-Path $PSScriptRoot 'test-camera.ps1')
             & (Join-Path $PSScriptRoot 'collect-logs.ps1')
         }
         Write-Host "QA complete. Transcript: $log"

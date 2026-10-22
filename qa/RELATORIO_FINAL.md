@@ -1,49 +1,67 @@
-﻿# Relatório de validação — HikCentral Cadastro
+# Relatório de validação — HikCentral Cadastro
 
 Data: 2026-10-21
 
 ## Resultado geral
 
-**BLOQUEADO para validação física e ponta a ponta.** O Android `ZF524P9TF6` foi detectado por ADB, mas está `unauthorized`. Nenhum cadastro foi enviado.
+**PARCIALMENTE VALIDADO; integração HikCentral bloqueada.** A versão 1.0.1 está instalada e foi testada no Android físico. Não houve cadastro, envio de face ou alteração de configurações. A rede não alcança TCP `37443`, portanto OpenAPI e catracas não puderam ser validadas.
 
 ## Ambiente e dispositivo
 
-- Projeto: `wfuzatto/hikicentral_cadastro_funcionario`, branch `main`.
-- Commit de referência: `da01cbd` (`fix(ui): diagnóstico acessível na engrenagem e header Android 15`).
-- Java: Temurin 17.0.20.1; Gradle local: 8.9; Android SDK local.
-- ADB: `C:\xampp\htdocs\android-platform-tools\platform-tools\adb.exe`.
-- Modelo, Android, API, resolução e densidade: **BLOQUEADO**, pois o ADB não está autorizado.
+- Repositório: `wfuzatto/hikicentral_cadastro_funcionario`, branch `main`.
+- Commit base: `da01cbd`; primeiro commit da suíte QA: `8d38211`.
+- Java Temurin 17.0.20.1; Gradle 8.9; Android SDK 35.
+- Motorola Moto G34 5G, Android 15 / API 35, 720×1600, 280 dpi.
+- ADB autorizado: `ZF524P9TF6`; Wi-Fi `PRODATAS-5G`.
+- Versão no aparelho: `versionName=1.0.1`, `versionCode=2`.
 
 ## Matriz de requisitos
 
 | Requisito | Estado | Evidência / limite |
 |---|---|---|
-| Análise estática do app e configuração | APROVADO | Manifesto, UI, API, assinatura, armazenamento e utilitários revisados. |
-| Testes JVM e build debug | APROVADO | 3 testes JVM aprovados, 0 falhas. `testDebugUnitTest` e `assembleDebug` concluíram com sucesso no Gradle 8.9. `qa/run-all.ps1 -SkipDevice` repetiu ambos com sucesso. |
-| Android físico, instalação e UI | BLOQUEADO | `adb devices -l` reportou `ZF524P9TF6 unauthorized`. |
-| Câmera e foto | NÃO EXECUTADO | Requer dispositivo autorizado e captura consentida. |
-| DNS/TCP/TLS no Windows | REPROVADO | DNS resolveu `608905397dde.sn.mynetname.net` para `200.149.203.116`; TCP `200.149.203.116:37443` expirou. TLS não alcançado. Evidência em `qa/reports/connectivity-*.txt`; não representa a rede do Android. |
-| DNS/TCP/TLS no Android | BLOQUEADO | ADB não autorizado. |
-| OpenAPI: autenticação, estrutura e endpoints | BLOQUEADO | Sem AppKey/AppSecret e sem conexão ao servidor. O teste OpenAPI do app é somente leitura. |
-| Cadastro Person e foto | NÃO EXECUTADO | Nenhuma pessoa ou imagem enviada. |
-| Atribuição e sincronização de catracas | NÃO EXECUTADO | Sem acesso à OpenAPI/terminais. HTTP 200 não provaria sincronização. |
-| GitHub Actions/publicação | NÃO EXECUTADO | APK não foi validado no dispositivo; versão e publicação final permanecem pendentes. |
+| Análise estática do app/configuração | APROVADO | Manifesto, UI, API, assinatura, armazenamento e utilitários revisados. |
+| Testes JVM e build debug | APROVADO | 3 testes JVM aprovados, 0 falhas. `qa/run-all.ps1 -SkipDevice` concluiu `testDebugUnitTest` e `assembleDebug`. |
+| Instalação/versão 1.0.1 no dispositivo | APROVADO | `dumpsys package` confirma versão instalada pelo usuário. |
+| Atualização local preservando app 1.0.0 | BLOQUEADO | `adb install -r` foi recusado por incompatibilidade de assinatura. O QA não desinstalou nem limpou o app. |
+| Abrir app e verificar tela | APROVADO | App 1.0.1 abriu; screenshot avaliado sem crash. Barra de status não cobre o título. |
+| Engrenagem e campos servidor/porta | APROVADO | Automação abriu configurações e encontrou Servidor/Porta HTTPS; não salvou alterações. |
+| Campo nome ausente | APROVADO | Envio vazio permaneceu local, marcou o campo e mostrou tooltip “Informe o nome” ao abrir o indicador. Nenhum Person foi criado. |
+| Câmera | APROVADO | Câmera abriu e retornou após cancelar; nenhuma foto foi capturada. |
+| Captura/qualidade/envio de face | NÃO EXECUTADO | Exige captura presencial consentida; nenhuma imagem foi enviada. |
+| Validações restantes, rotação e teclado | NÃO EXECUTADO | Sem cobertura automatizada completa desses cenários. |
+| DNS no Windows e Android | APROVADO | Ambos resolveram `608905397dde.sn.mynetname.net` para `200.149.203.116`. |
+| ICMP no Android | APROVADO | Ping ao IP respondeu. |
+| TCP Android/Windows para 37443 | REPROVADO | Android: `No route to host`; Windows: timeout. |
+| HTTPS/TLS e identificação do serviço | BLOQUEADO | TCP falhou antes do handshake TLS; não foi possível identificar o serviço/porta. |
+| Autenticação, endpoints e JSON OpenAPI | BLOQUEADO | Sem TCP e sem validação de AppKey/AppSecret. Login admin não foi usado. |
+| Criar Person, face e permissões | NÃO EXECUTADO | Nenhuma chamada mutável foi enviada. |
+| Sincronização de catracas | NÃO EXECUTADO | Sem acesso OpenAPI/terminais. |
+| GitHub Actions | APROVADO | Workflow “Android APK” do commit `8d38211` concluiu com sucesso (run `39708366446`). |
+
+## Contagem dos testes
+
+- JVM: 3 aprovados, 0 reprovados.
+- Dispositivo (1.0.1): 4 cenários aprovados — abrir/ver tela, configurações, validação de nome vazio e abrir/cancelar câmera; nenhum Person enviado.
+- Rede: DNS aprovado em 2 origens; ICMP aprovado no Android; TCP reprovado em 2 origens; TLS não alcançado.
+- Crashes: nenhum `FATAL EXCEPTION` detectado nos logs coletados.
+
+## Assinatura e preservação
+
+A tentativa inicial de atualizar o app 1.0.0 com o APK debug local foi recusada por certificados diferentes. SHA-256 do certificado 1.0.0 instalado anteriormente: `a3fff6b7b7947ae193c66c063c334570fc358c18f4292e2c132047f8ba3fca49`; APK local 1.0.1: `47ee111702b5d58a41e1f745016357acc5876bdf420efd3d698ad7de9fa2dde7`. Após o usuário instalar 1.0.1, o certificado atual é `6b17a4b4f17b2c18e0dad6260085c385f37fa172797b1daa49f917427a6a2a6b`. A chave privada correspondente não está no checkout nem no debug keystore local. O QA não apagou dados. A preservação de configurações durante a instalação manual do usuário não pôde ser confirmada.
 
 ## Artefatos
 
-- APK debug: `app/build/outputs/apk/debug/app-debug.apk` (2.357.516 bytes). **Não instalado no telefone.**
-- JUnit XML: `app/build/test-results/testDebugUnitTest/`.
-- Log da suíte: `qa/reports/run-20261021-225309.log`.
-- Total: 3 testes aprovados, 0 reprovados, 0 ignorados. UI/câmera/API no telefone: não executadas.
+- APK debug local 1.0.1: `app/build/outputs/apk/debug/app-debug.apk` (2.357.516 bytes); assinado com certificado diferente do APK atualmente instalado.
+- Relatórios JUnit XML: `app/build/test-results/testDebugUnitTest/`.
+- Tela inicial: `qa/reports/device-20261021-230327/screen.png`.
+- Configurações sem alteração: `qa/reports/device-20261021-230327/settings.png`.
+- Validação de nome vazio: `qa/reports/device-20261021-230934/empty-validation.png`.
+- Prévia da câmera, sem captura: `qa/reports/camera-20261021-230341/camera-preview.png`.
+- Diagnóstico de rede: `qa/reports/connectivity-20261021-231046.txt`.
+- Relatório/log da suíte local: `qa/reports/run-20261021-230823.log`.
 
-## Conectividade e integração
+## Diagnóstico e pendências
 
-No Windows, o DNS foi resolvido, mas o TCP à porta 37443 expirou. Não foi possível testar TLS/HTTPS nem identificar o serviço HTTP. A evidência não distingue firewall/NAT, rota ou serviço parado. O resultado no Android é desconhecido. Não há confirmação de que a porta publicada seja a OpenAPI Artemis. A documentação oficial Hikvision lista os endpoints de criação de pessoa, grupos de acesso, associação de pessoas e reaplicação de autorização, mas a versão/configuração instalada no servidor não foi informada: [OpenAPI V3.1.1](https://enpinfo.hikvision.com/hkwsen/unzip/20260723200832_95640_doc/index.html).
+DNS e ICMP funcionam a partir do Android, mas TCP à porta externa 37443 falha também no Windows. A causa pode estar em NAT/firewall, rota ou serviço/porta não publicada; a evidência não distingue essas hipóteses. Confirmar com o administrador qual é a porta HTTPS da OpenAPI Artemis e revisar publicação do serviço. Não desativar validação TLS. A [documentação oficial Hikvision OpenAPI V3.1.1](https://enpinfo.hikvision.com/hkwsen/unzip/20260723200832_95640_doc/index.html) lista os endpoints relevantes, mas não confirma que estejam ativos nesta instalação.
 
-## Pendências para concluir
-
-1. Desbloquear o telefone e aceitar o diálogo RSA **Permitir depuração USB** (marcando “Sempre permitir”). Se o diálogo não aparecer, habilitar Opções do desenvolvedor → Depuração USB, reconectar o cabo e executar `adb kill-server; adb start-server; adb devices -l`; revogar autorizações de depuração e aceitar o novo diálogo.
-2. Configurar AppKey/AppSecret OpenAPI no app. Não enviar credenciais ao repositório ou relatório.
-3. Confirmar porta/certificado Artemis no servidor e habilitar teste de leitura OpenAPI.
-4. Para o teste ponta a ponta, usar ambiente HikCentral de teste e pessoa de teste presente, autorizada para captura consentida.
-5. Conferir aplicação e sincronização nos terminais pelo HikCentral.
+A execução completa futura de `run-all.ps1` precisa do keystore que assinou o APK 1.0.1 instalado para que `adb install -r` seja compatível. Também falta restaurar TCP e executar o teste somente leitura com AppKey/AppSecret da OpenAPI. O teste ponta a ponta requer uma pessoa de teste presente e autorizada; a sincronização deve ser conferida nos terminais.
