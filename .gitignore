@@ -10,3 +10,18 @@ local.properties
 *.aab
 .env
 secrets.properties
+
+# Backend secrets, certificates, databases, local reports
+backend/target/
+backend/data/
+backend/.env
+backend/**/*.p12
+backend/**/*.pfx
+backend/**/*.jks
+backend/**/*.key
+backend/**/*.pem
+backend/**/*.crt
+backend/**/*.cer
+backend/**/*.db
+backend/**/*.mv.db
+backend/**/*.lock.db

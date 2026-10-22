@@ -85,9 +85,16 @@ class BackendApi(private val settings: BackendSettings) {
         } finally { conn.disconnect() }
     }
     fun health() = call("/api/v1/health")
-    fun groups(): JSONArray = call("/api/v1/access-groups").let {
-        // Endpoint retorna lista JSON, não objeto; usar consulta simples separada.
-        JSONArray()
+    fun groups(): JSONArray {
+        val conn = connection("/api/v1/access-groups", "GET")
+        try {
+            val code = conn.responseCode
+            if (code == 401) throw BackendException(code, "Token inválido ou revogado.")
+            if (code !in 200..299) throw BackendException(code, "Consulta de setores falhou: HTTP " + code)
+            val data = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText().take(100_000) }
+            return try { JSONArray(data) }
+            catch (_: Exception) { throw BackendException(code, "Resposta de setores não é uma lista JSON.") }
+        } finally { conn.disconnect() }
     }
     fun register(key: String, name: String, gender: Int, selected: List<String>,
                  jpeg: ByteArray): EnrollmentResult {
