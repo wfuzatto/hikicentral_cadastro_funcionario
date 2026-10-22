@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 
 /**
  * Tela única de cadastramento presencial: foto, nome, sexo e liberação.
- * Não existe login de operador. Credenciais da OpenAPI são configuradas uma vez.
+ * Sem login de operador. Android fala exclusivamente com backend seguro.
  */
 class MainActivity : Activity() {
     private val teal = Color.rgb(4, 104, 89)
@@ -66,8 +66,11 @@ class MainActivity : Activity() {
         buildScreen()
         updateCount()
         updatePending()
-        if (store.load().appKey.isBlank() || store.load().appSecret.isBlank()) {
-            statusMessage("Abra a engrenagem e configure AppKey e AppSecret da OpenAPI.", false)
+        if (store.load().url.isBlank() || store.load().deviceToken.isBlank()) {
+            statusMessage("Abra a engrenagem e configure URL HTTPS + token individual.", false)
+        }
+        if (store.legacyPendingPersonId() != null) {
+            statusMessage("Existe pendência do app antigo com Person já criado. Conferir manualmente no HikCentral.", false)
         }
     }
 
@@ -161,7 +164,7 @@ class MainActivity : Activity() {
         form.addView(genderGroup, standardMargin())
 
         form.addView(label("4. Setor de liberação *", 17f, dark, true), sectionMargin())
-        form.addView(label("Escolha um ou mais níveis. O aplicativo busca os IDs corretos no HikCentral.", 13f, gray, false))
+        form.addView(label("Escolha um ou mais níveis. O backend verifica os IDs autorizados.", 13f, gray, false))
         val quick = button("Marcar refeitório + entrada + saída", false).apply {
             setOnClickListener {
                 sectorChecks["REFEITORIO"]?.isChecked = true
@@ -190,7 +193,7 @@ class MainActivity : Activity() {
         form.addView(retryButton, standardMargin())
 
         form.addView(label(
-            "Padrão automático: departamento raiz, identificação gerada pelo HikCentral, validade de 10 anos, acesso 24h conforme os níveis já configurados.",
+            "Os dados opcionais são preenchidos no backend. A confirmação final depende também da aplicação das permissões no HikCentral.",
             12f, gray, false
         ), sectionMargin())
     }
@@ -231,7 +234,11 @@ class MainActivity : Activity() {
     private fun register() {
         if (busy) return
         if (store.pending() != null) {
-            statusMessage("Há um cadastro criado sem permissões completas. Use Reaplicar antes de cadastrar outro.", false)
+            statusMessage("Existe uma tentativa pendente. Consulte/retome antes de cadastrar outro funcionário.", false)
+            return
+        }
+        if (store.legacyPendingPersonId() != null) {
+            statusMessage("Pendência legada detectada: confira no HikCentral antes de continuar.", false)
             return
         }
         val name = nameInput.text.toString().trim().replace(Regex("\\s+"), " ")
@@ -255,36 +262,26 @@ class MainActivity : Activity() {
             openSettings()
             return
         }
+        val key = java.util.UUID.randomUUID().toString()
+        try { store.savePending(PendingEnrollment(key)) }
+        catch (e: Exception) {
+            statusMessage("Falha ao salvar chave de idempotência: " + (e.message ?: ""), false)
+            return
+        }
         setBusy(true)
-        statusMessage("Consultando organização e níveis de acesso...", true)
+        statusMessage("Enviando uma única tentativa ao backend...", true)
         pool.execute {
             try {
-                val api = HikApi(settings)
-                val orgId = api.rootOrganizationId()
-                val selected = api.selectedGroups(checked, api.groups())
                 val jpeg = PhotoUtils.photoBytes(file)
-                showProgress("Criando Person e enviando foto facial...")
-                val personId = api.createPerson(name, gender, jpeg, orgId)
-                store.savePending(PendingPerson(personId, selected.map { it.id }))
-                finishPending(api)
-                store.incrementSuccess()
-                store.clearPending()
-                runOnUiThread {
-                    resetForm()
-                    updateCount()
-                    updatePending()
-                    statusMessage("Funcionário cadastrado e permissões aplicadas! ID: " + personId, true)
-                }
+                val result = BackendApi(settings).register(key, name, gender, checked, jpeg)
+                runOnUiThread { showBackendResult(result) }
             } catch (e: Exception) {
                 runOnUiThread {
-                    val pending = store.pending()
                     updatePending()
                     statusMessage(
-                        if (pending != null) "Person ID " + pending.personId +
-                            " já foi criado, mas falta concluir liberação: " + (e.message ?: "Falha")
-                        else NetworkDiagnostics.explainFailure(e, settings.host, settings.port) +
-                            "\nSe já houve tentativa de inclusão, confira o painel antes de repetir.",
-                        false
+                        "Não foi possível confirmar a tentativa. Chave preservada: " + key +
+                            ". NÃO cadastre outra vez. Consulte/retome a tentativa. " +
+                            backendFailure(e), false
                     )
                 }
             } finally {
@@ -293,40 +290,58 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Em falhas intermediárias, salva os IDs ainda não atribuídos após cada sucesso. */
-    private fun finishPending(api: HikApi) {
-        var item = store.pending() ?: return
-        for (groupId in item.remainingGroups) {
-            showProgress("Atribuindo nível de acesso...")
-            api.assign(item.personId, groupId)
-            item = item.copy(remainingGroups = item.remainingGroups.filterNot { it == groupId })
-            store.savePending(item)
+    private fun backendFailure(e: Exception): String = when (e) {
+        is javax.net.ssl.SSLHandshakeException -> "Certificado TLS ou hostname inválido."
+        is java.net.ConnectException -> "Backend inacessível; verifique VPN, DNS e firewall."
+        is java.net.SocketTimeoutException -> "Timeout. Não reenviar criação automaticamente."
+        is BackendException -> e.message ?: "Backend recusou a operação."
+        else -> e.message ?: "Falha de comunicação."
+    }
+
+    private fun showBackendResult(result: EnrollmentResult) {
+        if (result.completed) {
+            store.clearPending()
+            store.incrementSuccess()
+            resetForm()
+            updateCount()
+            updatePending()
+            statusMessage("Funcionário confirmado pelo backend. Person: " +
+                (result.personId ?: "ID não retornado"), true)
+        } else {
+            updatePending()
+            val message = if (result.needsManualReconciliation)
+                "Cadastro em estado ambíguo. NÃO recriar. Conferir com administrador. "
+            else "Cadastro registrado, porém permissões/sincronização pendentes. "
+            statusMessage(message + "Estado: " + result.status +
+                ". Tentativa: " + result.idempotencyKey, false)
         }
-        showProgress("Sincronizando permissões com as catracas...")
-        api.applyToDevices()
     }
 
     private fun retryPending() {
         if (busy) return
-        val item = store.pending() ?: return
-        val settings = store.load()
+        val attempt = store.pending() ?: return
+        val config = store.load()
         setBusy(true)
         pool.execute {
             try {
-                val api = HikApi(settings)
-                finishPending(api)
-                store.clearPending()
-                store.incrementSuccess()
+                val api = BackendApi(config)
+                val current = api.getStatus(attempt.idempotencyKey)
+                val result = when (current.status) {
+                    "PERMISSIONS_PENDING", "SYNC_PENDING" -> api.resume(attempt.idempotencyKey)
+                    else -> current
+                }
+                runOnUiThread { showBackendResult(result) }
+            } catch (e: BackendException) {
                 runOnUiThread {
-                    resetForm()
-                    updateCount()
-                    updatePending()
-                    statusMessage("Permissões reaplicadas para Person ID " + item.personId, true)
+                    val suffix = if (e.statusCode == 404)
+                        " O backend não localizou esta chave. Não descartar sem validar o servidor correto."
+                        else ""
+                    statusMessage("Consulta da tentativa falhou: " + (e.message ?: "") + suffix, false)
                 }
             } catch (e: Exception) {
-                runOnUiThread { statusMessage(
-                    "Person ID " + item.personId + " segue pendente: " + (e.message ?: ""), false
-                ) }
+                runOnUiThread {
+                    statusMessage("Não foi possível consultar backend: " + backendFailure(e), false)
+                }
             } finally { runOnUiThread { setBusy(false) } }
         }
     }
@@ -341,10 +356,10 @@ class MainActivity : Activity() {
     }
 
     private fun updatePending() {
-        val p = store.pending()
-        retryButton.visibility = if (p == null) View.GONE else View.VISIBLE
-        retryButton.text = if (p == null) "REAPLICAR CADASTRO PENDENTE"
-            else "REAPLICAR PERMISSÕES • Person " + p.personId
+        val pending = store.pending()
+        retryButton.visibility = if (pending == null) View.GONE else View.VISIBLE
+        retryButton.text = if (pending == null) "CONSULTAR CADASTRO PENDENTE"
+            else "CONSULTAR / RETOMAR • " + pending.idempotencyKey.take(8)
     }
 
     private fun updateCount() {
@@ -370,113 +385,88 @@ class MainActivity : Activity() {
 
     private fun openSettings() {
         if (busy) return
-        val s = store.load()
-        val column = LinearLayout(this).apply {
+        val saved = store.load()
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(8), dp(22), dp(8))
+            setPadding(dp(22), dp(6), dp(22), dp(8))
         }
-        fun field(title: String, value: String, password: Boolean = false): EditText {
-            column.addView(label(title, 14f, dark, true), standardMargin())
+        fun field(caption: String, value: String, password: Boolean = false): EditText {
+            container.addView(label(caption, 13f, dark, true), standardMargin())
             return EditText(this).apply {
                 setText(value)
-                textSize = 15f
+                textSize = 14f
                 isSingleLine = true
                 inputType = if (password)
                     InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 else InputType.TYPE_CLASS_TEXT
-                column.addView(this)
+                container.addView(this)
             }
         }
-        val host = field("Servidor (DNS / IP)", s.host)
-        val port = field("Porta HTTPS", s.port.toString()).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
+        val url = field("URL HTTPS do backend", saved.url).apply {
+            hint = "https://backend.exemplo.local:18443"
         }
-        val key = field("OpenAPI AppKey", s.appKey)
-        val secret = field("OpenAPI AppSecret", s.appSecret, true)
-        column.addView(label(
-            "Não use o usuário/senha admin: habilite OpenAPI e obtenha as chaves AK/SK. Certificado HTTPS válido é obrigatório.",
-            12f, gray, false
-        ), sectionMargin())
-
+        val token = field("Token individual do dispositivo", saved.deviceToken, true)
+        val ca = field("CA interna (PEM opcional; conteúdo público)", saved.caPem).apply {
+            isSingleLine = false
+            minLines = 2
+            maxLines = 5
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            hint = "Cole aqui a CA PEM verificada pelo administrador"
+        }
+        val fingerprint = field("SHA-256 da CA (obtido por canal confiável)",
+            saved.caFingerprint).apply {
+            hint = "64 caracteres hexadecimais"
+        }
         val output = label(
-            "Primeiro teste DNS/TCP/HTTPS sem precisar de AppKey. " +
-                "Depois teste as permissões da OpenAPI.",
-            13f, gray, false
-        ).apply {
-            setTextIsSelectable(true)
-            setPadding(dp(8), dp(12), dp(8), dp(12))
-            background = rounded(Color.rgb(235, 244, 241), 8)
-        }
-        column.addView(output, sectionMargin())
-        val apiTestButton = button("TESTAR OPENAPI (AK/SK)", false)
-        column.addView(apiTestButton, standardMargin())
-
+            "O token fica criptografado pelo Android Keystore. Não use AppKey/AppSecret do HikCentral. " +
+                "CA interna: confirme o fingerprint com o administrador por canal independente.",
+            12f, gray, false
+        ).apply { setTextIsSelectable(true) }
+        container.addView(output, sectionMargin())
         val dialog = AlertDialog.Builder(this)
-            .setTitle("⚙ Configuração HikCentral")
-            .setView(ScrollView(this).apply { addView(column) })
+            .setTitle("⚙ Configuração do backend")
+            .setView(ScrollView(this).apply { addView(container) })
             .setNegativeButton("Cancelar", null)
-            .setNeutralButton("DIAGNOSTICAR REDE", null)
+            .setNeutralButton("Testar backend", null)
             .setPositiveButton("Salvar", null)
             .create()
         dialog.setOnShowListener {
-            fun collect(): ServerSettings {
-                val h = host.text.toString().trim().removePrefix("https://").trimEnd('/')
-                return ServerSettings(
-                    h, port.text.toString().trim().toIntOrNull() ?: -1,
-                    key.text.toString().trim(), secret.text.toString()
-                )
-            }
+            fun values() = BackendSettings(
+                url.text.toString().trim(),
+                token.text.toString().trim(),
+                ca.text.toString().trim(),
+                fingerprint.text.toString().trim()
+            )
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 try {
-                    store.save(collect())
-                    statusMessage("Configuração salva neste aparelho.", true)
+                    store.save(values())
+                    statusMessage("Backend configurado; nenhuma credencial Artemis no Android.", true)
                     dialog.dismiss()
                 } catch (e: Exception) {
                     output.text = e.message ?: "Configuração inválida."
                 }
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val config = collect()
-                if (!NetworkDiagnostics.validAddress(config.host, config.port)) {
-                    output.text = "Servidor ou porta inválidos."
-                    return@setOnClickListener
-                }
-                val diagnosticButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
-                diagnosticButton.isEnabled = false
-                apiTestButton.isEnabled = false
-                output.text = "Consultando DNS, TCP e certificado HTTPS..."
-                pool.execute {
-                    val result = NetworkDiagnostics.check(config.host, config.port)
-                    runOnUiThread {
-                        diagnosticButton.isEnabled = true
-                        apiTestButton.isEnabled = true
-                        output.text = result
-                        statusMessage(result, result.contains("HTTPS: OK"))
-                    }
-                }
-            }
-            apiTestButton.setOnClickListener {
-                val config = try { collect().also { it.validate() } }
+                val config = try { values().also { it.validate() } }
                 catch (e: Exception) {
-                    output.text = e.message ?: "Configure AppKey e AppSecret."
+                    output.text = e.message ?: "Configuração inválida"
                     return@setOnClickListener
                 }
-                apiTestButton.isEnabled = false
-                output.text = "Validando chaves e permissões OpenAPI..."
+                val test = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                test.isEnabled = false
+                output.text = "Testando TLS, saúde e token do backend..."
                 pool.execute {
-                    val result = try {
-                        val api = HikApi(config)
-                        val org = api.rootOrganizationId()
-                        val countGroups = api.groups().size
-                        "OpenAPI autenticada! Organização " + org +
-                            " • " + countGroups + " níveis de acesso encontrados."
+                    val response = try {
+                        val api = BackendApi(config)
+                        api.health()
+                        api.groups()
+                        "Conexão HTTPS e token validados. Backend acessível."
                     } catch (e: Exception) {
-                        NetworkDiagnostics.explainFailure(e, config.host, config.port)
+                        "Falha: " + backendFailure(e)
                     }
                     runOnUiThread {
-                        apiTestButton.isEnabled = true
-                        output.text = result
-                        statusMessage(result, result.startsWith("OpenAPI autenticada"))
+                        output.text = response
+                        test.isEnabled = true
                     }
                 }
             }
