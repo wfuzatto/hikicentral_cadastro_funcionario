@@ -24,6 +24,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -93,6 +95,15 @@ class MainActivity : Activity() {
         }
         header.addView(gear, LinearLayout.LayoutParams(dp(55), dp(52)))
         root.addView(header)
+        // Respeitar a barra de status no Android 15+ (edge-to-edge).
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            val bottom = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            header.setPadding(dp(20), dp(10) + top, dp(10), dp(10))
+            root.setPadding(0, 0, 0, bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
 
         val scroll = ScrollView(this).apply { isFillViewport = true }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -271,8 +282,8 @@ class MainActivity : Activity() {
                     statusMessage(
                         if (pending != null) "Person ID " + pending.personId +
                             " já foi criado, mas falta concluir liberação: " + (e.message ?: "Falha")
-                        else "Cadastro não confirmado: " + (e.message ?: "Erro de comunicação") +
-                            ". Se houve timeout, confira o HikCentral antes de tentar novamente.",
+                        else NetworkDiagnostics.explainFailure(e, settings.host, settings.port) +
+                            "\nSe já houve tentativa de inclusão, confira o painel antes de repetir.",
                         false
                     )
                 }
@@ -387,11 +398,24 @@ class MainActivity : Activity() {
             12f, gray, false
         ), sectionMargin())
 
+        val output = label(
+            "Primeiro teste DNS/TCP/HTTPS sem precisar de AppKey. " +
+                "Depois teste as permissões da OpenAPI.",
+            13f, gray, false
+        ).apply {
+            setTextIsSelectable(true)
+            setPadding(dp(8), dp(12), dp(8), dp(12))
+            background = rounded(Color.rgb(235, 244, 241), 8)
+        }
+        column.addView(output, sectionMargin())
+        val apiTestButton = button("TESTAR OPENAPI (AK/SK)", false)
+        column.addView(apiTestButton, standardMargin())
+
         val dialog = AlertDialog.Builder(this)
             .setTitle("⚙ Configuração HikCentral")
             .setView(ScrollView(this).apply { addView(column) })
             .setNegativeButton("Cancelar", null)
-            .setNeutralButton("Testar conexão", null)
+            .setNeutralButton("DIAGNOSTICAR REDE", null)
             .setPositiveButton("Salvar", null)
             .create()
         dialog.setOnShowListener {
@@ -408,30 +432,51 @@ class MainActivity : Activity() {
                     statusMessage("Configuração salva neste aparelho.", true)
                     dialog.dismiss()
                 } catch (e: Exception) {
-                    Toast.makeText(this, e.message ?: "Dados inválidos", Toast.LENGTH_LONG).show()
+                    output.text = e.message ?: "Configuração inválida."
                 }
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
-                val config = try { collect().also { it.validate() } }
-                catch (e: Exception) {
-                    Toast.makeText(this, e.message ?: "Dados inválidos", Toast.LENGTH_LONG).show()
+                val config = collect()
+                if (!NetworkDiagnostics.validAddress(config.host, config.port)) {
+                    output.text = "Servidor ou porta inválidos."
                     return@setOnClickListener
                 }
-                dialog.getButton(AlertDialog.BUTTON_NEUTRAL).isEnabled = false
-                statusMessage("Testando OpenAPI...", true)
+                val diagnosticButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+                diagnosticButton.isEnabled = false
+                apiTestButton.isEnabled = false
+                output.text = "Consultando DNS, TCP e certificado HTTPS..."
+                pool.execute {
+                    val result = NetworkDiagnostics.check(config.host, config.port)
+                    runOnUiThread {
+                        diagnosticButton.isEnabled = true
+                        apiTestButton.isEnabled = true
+                        output.text = result
+                        statusMessage(result, result.contains("HTTPS: OK"))
+                    }
+                }
+            }
+            apiTestButton.setOnClickListener {
+                val config = try { collect().also { it.validate() } }
+                catch (e: Exception) {
+                    output.text = e.message ?: "Configure AppKey e AppSecret."
+                    return@setOnClickListener
+                }
+                apiTestButton.isEnabled = false
+                output.text = "Validando chaves e permissões OpenAPI..."
                 pool.execute {
                     val result = try {
                         val api = HikApi(config)
                         val org = api.rootOrganizationId()
                         val countGroups = api.groups().size
-                        "Conectado à OpenAPI. Organização " + org +
-                            " • " + countGroups + " níveis de acesso disponíveis."
-                    } catch (e: Exception) { "Teste falhou: " + (e.message ?: "") }
+                        "OpenAPI autenticada! Organização " + org +
+                            " • " + countGroups + " níveis de acesso encontrados."
+                    } catch (e: Exception) {
+                        NetworkDiagnostics.explainFailure(e, config.host, config.port)
+                    }
                     runOnUiThread {
-                        dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.isEnabled = true
-                        val ok = result.startsWith("Conectado")
-                        statusMessage(result, ok)
-                        Toast.makeText(this, result, Toast.LENGTH_LONG).show()
+                        apiTestButton.isEnabled = true
+                        output.text = result
+                        statusMessage(result, result.startsWith("OpenAPI autenticada"))
                     }
                 }
             }
